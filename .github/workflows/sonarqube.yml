@@ -16,6 +16,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Install .NET SDK
         run: |
           wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
