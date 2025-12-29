@@ -52,6 +52,8 @@ jobs:
             /v:"1.0" \
             /d:sonar.host.url="${{ secrets.SONAR_HOST_URL }}" \
             /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
+            /d:sonar.projectBaseDir="${GITHUB_WORKSPACE}" \
+            /d:sonar.sourceEncoding="UTF-8" \
             /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/*.md"
 
       - name: Build and analyze
