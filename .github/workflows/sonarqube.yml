@@ -77,11 +77,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get Minikube IP
-        run: echo "TARGET_URL=http://$(minikube ip):32000/swagger" >> $GITHUB_ENV
-
       - name: ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
-          target: "${{ env.TARGET_URL }}"
+          target: "http://192.168.49.2:32000/index.html"
           cmd_options: "-a"
