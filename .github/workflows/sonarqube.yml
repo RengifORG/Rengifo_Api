@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   sonarqube:
+    # 1. Evita bucle infinito si el commit viene del job build_and_gitops
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: [self-hosted, Linux, X64, rengifo]
 
     steps:
@@ -74,6 +76,8 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   build_and_gitops:
+    # 1. Evita bucle infinito
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: [self-hosted, Linux, X64, rengifo]
     needs: [sonarqube]
 
@@ -94,19 +98,22 @@ jobs:
         run: |
           TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           echo "Updating redeployTimestamp to ${TS}"
-          # Reemplaza el valor de la anotación (requiere que exista "redeployTimestamp: ...")
-          sed -i "s/redeployTimestamp: .*/redeployTimestamp: \"${TS}\"/g" k8s/deployment.yml
+          # 2. Apunta al archivo correcto: k8s/rengifo-api.yaml
+          sed -i "s/redeployTimestamp: .*/redeployTimestamp: \"${TS}\"/g" k8s/rengifo-api.yaml
           git status --porcelain
 
       - name: Commit and push manifest change
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add k8s/deployment.yml
+          # 2. Agrega el archivo correcto
+          git add k8s/rengifo-api.yaml
           git commit -m "ci: trigger ArgoCD redeploy [skip ci]" || echo "No changes to commit"
           git push origin master || true
 
   dast_zap:
+    # 1. Evita ejecución innecesaria en commits de skip ci
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: [self-hosted, Linux, X64, rengifo]
     needs: [build_and_gitops]
 
@@ -117,5 +124,6 @@ jobs:
       - name: ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
-          target: "http://192.168.49.2:32000/index.html"
+          # 3. Apunta a Swagger/OpenAPI para mejor escaneo de API
+          target: "http://192.168.49.2:32000/swagger/index.html"
           cmd_options: "-a"
