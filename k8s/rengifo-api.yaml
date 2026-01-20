@@ -12,6 +12,8 @@ spec:
     metadata:
       labels:
         app: rengifo-api
+      annotations:
+        redeployTimestamp: "0"
     spec:
       containers:
         - name: rengifo-api
@@ -41,4 +43,3 @@ spec:
     - port: 5000
       targetPort: 5000
       nodePort: 32000
-
