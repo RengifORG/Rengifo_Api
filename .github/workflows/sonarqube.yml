@@ -48,9 +48,6 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
 
-      - name: Build
-        run: dotnet build --no-restore
-
       - name: Begin SonarQube analysis
         run: |
           dotnet sonarscanner begin \
@@ -63,8 +60,11 @@ jobs:
             /d:sonar.sourceEncoding="UTF-8" \
             /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/*.md"
 
-      - name: Build and analyze
-        run: dotnet build
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
 
       - name: End SonarQube analysis
         run: dotnet sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
