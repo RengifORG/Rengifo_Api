@@ -42,7 +42,6 @@ jobs:
       - name: Install SonarScanner for .NET
         run: dotnet tool install --global dotnet-sonarscanner
 
-      # Bloque ordenado según solicitud
       - name: Restore dependencies
         run: dotnet restore
 
