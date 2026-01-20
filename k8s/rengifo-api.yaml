@@ -68,3 +68,19 @@ target: "http://192.168.49.2:32000/swagger/index.html"
 si no tienes swagger, usa un endpoint real (o crea /health):
 
 target: "http://192.168.49.2:32000/health"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rengifo-api
+  namespace: rengifo
+spec:
+  type: NodePort
+  selector:
+    app: rengifo-api
+  ports:
+    - port: 5000
+      targetPort: 5000
+      nodePort: 32000
+
