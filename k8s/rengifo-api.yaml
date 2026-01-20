@@ -1,73 +1,33 @@
-2) Asegura que la anotación exista en k8s/rengifo-api.yaml
-
-El sed solo reemplaza si ya existe redeployTimestamp:.
-Si no existe todavía, no hará nada (y tu git commit dirá “No changes”).
-
-Entonces agrega una vez (manual) esta sección a tu manifest.
-
-En k8s/rengifo-api.yaml dentro de:
-
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rengifo-api
+  namespace: rengifo
 spec:
-  template:
-    metadata:
-      labels:
-        app: rengifo-api
-
-
-agrega:
-
-      annotations:
-        redeployTimestamp: "2026-01-20T07:54:10Z"
-
-
-Queda así:
-
-spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: rengifo-api
   template:
     metadata:
       labels:
         app: rengifo-api
       annotations:
-        redeployTimestamp: "2026-01-20T07:54:10Z"
-
-
-Haz commit y push de ese cambio:
-
-git add k8s/rengifo-api.yaml
-git commit -m "chore: add redeploy annotation for ArgoCD rollout"
-git push origin master
-
-3) Evitar loop con [skip ci] (esto es obligatorio)
-
-Ya estás haciendo commits automáticos con [skip ci], pero tu workflow no los ignora todavía.
-
-Agrega este if a cada job:
-
-if: "!contains(github.event.head_commit.message, '[skip ci]')"
-
-
-Ejemplo:
-
-jobs:
-  sonarqube:
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    runs-on: [self-hosted, Linux, X64, rengifo]
-
-
-Y lo mismo para build_and_gitops y dast_zap.
-
-4) Ajuste rápido de ZAP (para que tenga sentido en API)
-
-Cambia el target:
-
-si tienes Swagger:
-
-target: "http://192.168.49.2:32000/swagger/index.html"
-
-
-si no tienes swagger, usa un endpoint real (o crea /health):
-
-target: "http://192.168.49.2:32000/health"
+        redeployTimestamp: "0"
+    spec:
+      containers:
+        - name: rengifo-api
+          image: rengifo-api:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          env:
+            - name: LaunchDarkly__UseRelay
+              value: "true"
+            - name: LaunchDarkly__SdkKey
+              value: "sdk-local-relay"
+            - name: LaunchDarkly__RelayBaseUri
+              value: "http://launchdarkly-relay-ld-relay.launchdarkly.svc.cluster.local:8030"
 
 ---
 apiVersion: v1
@@ -80,7 +40,7 @@ spec:
   selector:
     app: rengifo-api
   ports:
-    - port: 5000
+    - name: http
+      port: 5000
       targetPort: 5000
       nodePort: 32000
-
