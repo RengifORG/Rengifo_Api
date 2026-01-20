@@ -1,45 +1,155 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rengifo-api
-  namespace: rengifo
-spec:
-  replicas: 4
-  selector:
-    matchLabels:
-      app: rengifo-api
-  template:
-    metadata:
-      labels:
-        app: rengifo-api
-      annotations:
-        redeployTimestamp: "0"
-    spec:
-      containers:
-        - name: rengifo-api
-          image: rengifo-api:v1
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 5000
-          env:
-            - name: LaunchDarkly__UseRelay
-              value: "true"
-            - name: LaunchDarkly__SdkKey
-              value: "sdk-local-relay"
-            - name: LaunchDarkly__RelayBaseUri
-              value: "http://launchdarkly-relay-ld-relay.launchdarkly.svc.cluster.local:8030"
+name: SonarQube Scan
 
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: rengifo-api
-  namespace: rengifo
-spec:
-  type: NodePort
-  selector:
-    app: rengifo-api
-  ports:
-    - port: 5000
-      targetPort: 5000
-      nodePort: 32000
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sonarqube:
+    runs-on: [self-hosted, Linux, X64, rengifo]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install .NET SDK
+        run: |
+          wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+          chmod +x dotnet-install.sh
+          ./dotnet-install.sh --channel 9.0 --install-dir ~/.dotnet
+          echo "~/.dotnet" >> $GITHUB_PATH
+          echo "DOTNET_ROOT=~/.dotnet" >> $GITHUB_ENV
+
+      - name: Install SonarScanner for .NET
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Begin SonarQube analysis
+        run: |
+          dotnet sonarscanner begin \
+            /k:"rengifo_api" \
+            /n:"Rengifo Api" \
+            /v:"1.0" \
+            /d:sonar.host.url="${{ secrets.SONAR_HOST_URL }}" \
+            /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
+            /d:sonar.projectBaseDir="${GITHUB_WORKSPACE}" \
+            /d:sonar.sourceEncoding="UTF-8" \
+            /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/*.md"
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
+
+      - name: End SonarQube analysis
+        run: dotnet sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
+
+      - name: Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
+        with:
+          scanMetadataReportFile: .sonarqube/out/.sonar/report-task.txt
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  build_and_gitops:
+    runs-on: [self-hosted, Linux, X64, rengifo]
+    needs: [sonarqube]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Build image in Minikube docker
+        run: |
+          minikube status || minikube start
+          eval "$(minikube docker-env)"
+          docker build -t rengifo-api:v1 .
+
+      - name: Bump redeploy annotation (GitOps trigger)
+        run: |
+          set -euo pipefail
+          TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "Updating redeployTimestamp to ${TS}"
+          # Encuentra el YAML del deployment de rengifo-api
+          FILE="$(grep -RIl --include='*.yml' --include='*.yaml' 'kind: Deployment' k8s | while read -r f; do
+                    if grep -q 'name: rengifo-api' "$f"; then echo "$f"; break; fi
+                  done)"
+
+          if [ -z "${FILE:-}" ]; then
+            echo "ERROR: No se encontró el manifest del Deployment rengifo-api dentro de k8s/"
+            echo "Contenido de k8s/:"
+            ls -la k8s
+            exit 1
+          fi
+
+          echo "Manifest encontrado: $FILE"
+
+          # Si ya existe redeployTimestamp, lo reemplaza
+          if grep -q 'redeployTimestamp:' "$FILE"; then
+            sed -i "s/redeployTimestamp: .*/redeployTimestamp: \"${TS}\"/g" "$FILE"
+          else
+            # Inserta la anotación debajo de metadata: dentro de template:
+            # (funciona para el 90% de manifests simples)
+            awk -v ts="$TS" '
+              {print}
+              $0 ~ /template:/ {inTemplate=1}
+              inTemplate && $0 ~ /metadata:/ && !done {
+                print "      annotations:"
+                print "        redeployTimestamp: \"" ts "\""
+                done=1
+              }
+            ' "$FILE" > /tmp/dep.yml && mv /tmp/dep.yml "$FILE"
+          fi
+
+          echo "Cambio aplicado:"
+          grep -n "redeployTimestamp" "$FILE" || true
+
+          git status --porcelain
+
+      - name: Commit and push manifest change
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          # Se usa "git add ." para capturar el archivo modificado dinámicamente en el paso anterior
+          git add .
+          git commit -m "ci: trigger ArgoCD redeploy [skip ci]" || echo "No changes to commit"
+          git push origin master || true
+
+  dast_zap:
+    runs-on: [self-hosted, Linux, X64, rengifo]
+    needs: [build_and_gitops]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://192.168.49.2:32000/index.html"
+          cmd_options: "-a"
