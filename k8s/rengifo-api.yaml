@@ -1,155 +1,70 @@
-name: SonarQube Scan
+2) Asegura que la anotación exista en k8s/rengifo-api.yaml
 
-on:
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+El sed solo reemplaza si ya existe redeployTimestamp:.
+Si no existe todavía, no hará nada (y tu git commit dirá “No changes”).
 
-permissions:
-  contents: write
-  issues: write
+Entonces agrega una vez (manual) esta sección a tu manifest.
+
+En k8s/rengifo-api.yaml dentro de:
+
+spec:
+  template:
+    metadata:
+      labels:
+        app: rengifo-api
+
+
+agrega:
+
+      annotations:
+        redeployTimestamp: "0"
+
+
+Queda así:
+
+spec:
+  template:
+    metadata:
+      labels:
+        app: rengifo-api
+      annotations:
+        redeployTimestamp: "0"
+
+
+Haz commit y push de ese cambio:
+
+git add k8s/rengifo-api.yaml
+git commit -m "chore: add redeploy annotation for ArgoCD rollout"
+git push origin master
+
+3) Evitar loop con [skip ci] (esto es obligatorio)
+
+Ya estás haciendo commits automáticos con [skip ci], pero tu workflow no los ignora todavía.
+
+Agrega este if a cada job:
+
+if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+
+Ejemplo:
 
 jobs:
   sonarqube:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: [self-hosted, Linux, X64, rengifo]
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+Y lo mismo para build_and_gitops y dast_zap.
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+4) Ajuste rápido de ZAP (para que tenga sentido en API)
 
-      - name: Install .NET SDK
-        run: |
-          wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
-          chmod +x dotnet-install.sh
-          ./dotnet-install.sh --channel 9.0 --install-dir ~/.dotnet
-          echo "~/.dotnet" >> $GITHUB_PATH
-          echo "DOTNET_ROOT=~/.dotnet" >> $GITHUB_ENV
+Cambia el target:
 
-      - name: Install SonarScanner for .NET
-        run: dotnet tool install --global dotnet-sonarscanner
+si tienes Swagger:
 
-      - name: Restore dependencies
-        run: dotnet restore
+target: "http://192.168.49.2:32000/swagger/index.html"
 
-      - name: Begin SonarQube analysis
-        run: |
-          dotnet sonarscanner begin \
-            /k:"rengifo_api" \
-            /n:"Rengifo Api" \
-            /v:"1.0" \
-            /d:sonar.host.url="${{ secrets.SONAR_HOST_URL }}" \
-            /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
-            /d:sonar.projectBaseDir="${GITHUB_WORKSPACE}" \
-            /d:sonar.sourceEncoding="UTF-8" \
-            /d:sonar.exclusions="**/bin/**,**/obj/**,**/node_modules/**,**/*.md"
 
-      - name: Build
-        run: dotnet build -c Release --no-restore
+si no tienes swagger, usa un endpoint real (o crea /health):
 
-      - name: Test
-        run: dotnet test -c Release --no-build --verbosity normal
-
-      - name: End SonarQube analysis
-        run: dotnet sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
-
-      - name: Quality Gate
-        uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
-        with:
-          scanMetadataReportFile: .sonarqube/out/.sonar/report-task.txt
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-  build_and_gitops:
-    runs-on: [self-hosted, Linux, X64, rengifo]
-    needs: [sonarqube]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
-
-      - name: Build image in Minikube docker
-        run: |
-          minikube status || minikube start
-          eval "$(minikube docker-env)"
-          docker build -t rengifo-api:v1 .
-
-      - name: Bump redeploy annotation (GitOps trigger)
-        run: |
-          set -euo pipefail
-          TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          echo "Updating redeployTimestamp to ${TS}"
-          # Encuentra el YAML del deployment de rengifo-api
-          FILE="$(grep -RIl --include='*.yml' --include='*.yaml' 'kind: Deployment' k8s | while read -r f; do
-                    if grep -q 'name: rengifo-api' "$f"; then echo "$f"; break; fi
-                  done)"
-
-          if [ -z "${FILE:-}" ]; then
-            echo "ERROR: No se encontró el manifest del Deployment rengifo-api dentro de k8s/"
-            echo "Contenido de k8s/:"
-            ls -la k8s
-            exit 1
-          fi
-
-          echo "Manifest encontrado: $FILE"
-
-          # Si ya existe redeployTimestamp, lo reemplaza
-          if grep -q 'redeployTimestamp:' "$FILE"; then
-            sed -i "s/redeployTimestamp: .*/redeployTimestamp: \"${TS}\"/g" "$FILE"
-          else
-            # Inserta la anotación debajo de metadata: dentro de template:
-            # (funciona para el 90% de manifests simples)
-            awk -v ts="$TS" '
-              {print}
-              $0 ~ /template:/ {inTemplate=1}
-              inTemplate && $0 ~ /metadata:/ && !done {
-                print "      annotations:"
-                print "        redeployTimestamp: \"" ts "\""
-                done=1
-              }
-            ' "$FILE" > /tmp/dep.yml && mv /tmp/dep.yml "$FILE"
-          fi
-
-          echo "Cambio aplicado:"
-          grep -n "redeployTimestamp" "$FILE" || true
-
-          git status --porcelain
-
-      - name: Commit and push manifest change
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          # Se usa "git add ." para capturar el archivo modificado dinámicamente en el paso anterior
-          git add .
-          git commit -m "ci: trigger ArgoCD redeploy [skip ci]" || echo "No changes to commit"
-          git push origin master || true
-
-  dast_zap:
-    runs-on: [self-hosted, Linux, X64, rengifo]
-    needs: [build_and_gitops]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.14.0
-        with:
-          target: "http://192.168.49.2:32000/index.html"
-          cmd_options: "-a"
+target: "http://192.168.49.2:32000/health"
