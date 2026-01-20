@@ -17,7 +17,7 @@ spec:
 agrega:
 
       annotations:
-        redeployTimestamp: "2026-01-20T06:41:09Z"
+        redeployTimestamp: "2026-01-20T07:54:10Z"
 
 
 Queda así:
@@ -28,7 +28,7 @@ spec:
       labels:
         app: rengifo-api
       annotations:
-        redeployTimestamp: "2026-01-20T06:41:09Z"
+        redeployTimestamp: "2026-01-20T07:54:10Z"
 
 
 Haz commit y push de ese cambio:
