@@ -13,7 +13,7 @@ spec:
       labels:
         app: rengifo-api
       annotations:
-        redeployTimestamp: "2026-01-20T07:56:18Z"
+        redeployTimestamp: "2026-01-21T00:14:50Z"
     spec:
       containers:
         - name: rengifo-api
